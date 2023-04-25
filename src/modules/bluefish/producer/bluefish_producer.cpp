@@ -192,16 +192,15 @@ struct bluefish_producer
     int uhd_mode_ = 0; // 0 -> Do Not Allow BVC-ML, 1 -> Auto ( ie. Native buffers will do default mode, or BVC will do
                        // SQ.),  2 -> Force 2SI, 3 -> Force SQ
 
-    bluefish_producer(const bluefish_producer&) = delete;
+    bluefish_producer(const bluefish_producer&)            = delete;
     bluefish_producer& operator=(const bluefish_producer&) = delete;
 
-    bluefish_producer(
-        const core::video_format_desc& format_desc,
-        int                                         device_index,
-        int                                         stream_index,
-        int                                         uhd_mode,
-        const spl::shared_ptr<core::frame_factory>& frame_factory,
-        const core::video_format_repository& format_repository)
+    bluefish_producer(const core::video_format_desc&              format_desc,
+                      int                                         device_index,
+                      int                                         stream_index,
+                      int                                         uhd_mode,
+                      const spl::shared_ptr<core::frame_factory>& frame_factory,
+                      const core::video_format_repository&        format_repository)
         : device_index_(device_index)
         , stream_index_(stream_index)
         , blue_(create_blue(device_index))
@@ -633,10 +632,12 @@ struct bluefish_producer
         }
     }
 
-    core::draw_frame get_frame()
+    core::draw_frame get_frame(const core::video_field field)
     {
         if (exception_ != nullptr)
             std::rethrow_exception(exception_);
+
+        // TODO - field
 
         core::draw_frame frame;
         if (!frame_buffer_.try_pop(frame)) {
@@ -655,8 +656,6 @@ struct bluefish_producer
         std::lock_guard<std::mutex> lock(state_mutex_);
         return state_;
     }
-
-    boost::rational<int> get_out_framerate() const { return format_desc_.framerate; }
 };
 
 class bluefish_producer_proxy : public core::frame_producer
@@ -668,7 +667,7 @@ class bluefish_producer_proxy : public core::frame_producer
   public:
     explicit bluefish_producer_proxy(const core::video_format_desc&              format_desc,
                                      const spl::shared_ptr<core::frame_factory>& frame_factory,
-                                     const core::video_format_repository& format_repository,
+                                     const core::video_format_repository&        format_repository,
                                      int                                         device_index,
                                      int                                         stream_index,
                                      int                                         uhd_mode,
@@ -679,7 +678,8 @@ class bluefish_producer_proxy : public core::frame_producer
         auto ctx = core::diagnostics::call_context::for_thread();
         executor_.invoke([=] {
             core::diagnostics::call_context::for_thread() = ctx;
-            producer_.reset(new bluefish_producer(format_desc, device_index, stream_index, uhd_mode, frame_factory, format_repository));
+            producer_.reset(new bluefish_producer(
+                format_desc, device_index, stream_index, uhd_mode, frame_factory, format_repository));
         });
     }
 
@@ -692,15 +692,16 @@ class bluefish_producer_proxy : public core::frame_producer
 
     // frame_producer
 
-    core::draw_frame receive_impl(int nb_samples) override { return producer_->get_frame(); }
+    core::draw_frame receive_impl(const core::video_field field, int nb_samples) override
+    {
+        return producer_->get_frame(field);
+    }
 
     uint32_t nb_frames() const override { return length_; }
 
     std::wstring print() const override { return producer_->print(); }
 
     std::wstring name() const override { return L"bluefish"; }
-
-    boost::rational<int> get_out_framerate() const { return producer_->get_out_framerate(); }
 };
 
 spl::shared_ptr<core::frame_producer> create_producer(const core::frame_producer_dependencies& dependencies,
@@ -724,8 +725,13 @@ spl::shared_ptr<core::frame_producer> create_producer(const core::frame_producer
     auto length         = get_param(L"LENGTH", params, std::numeric_limits<uint32_t>::max());
     auto in_format_desc = dependencies.format_repository.find(get_param(L"FORMAT", params, L"INVALID"));
 
-    auto producer = spl::make_shared<bluefish_producer_proxy>(
-        dependencies.format_desc, dependencies.frame_factory, dependencies.format_repository, device_index, stream_index, uhd_mode, length);
+    auto producer = spl::make_shared<bluefish_producer_proxy>(dependencies.format_desc,
+                                                              dependencies.frame_factory,
+                                                              dependencies.format_repository,
+                                                              device_index,
+                                                              stream_index,
+                                                              uhd_mode,
+                                                              length);
 
     return create_destroy_proxy(producer);
 }

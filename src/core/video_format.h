@@ -31,6 +31,13 @@
 
 namespace caspar { namespace core {
 
+enum class video_field
+{
+    progressive,
+    a,
+    b,
+};
+
 enum class video_format
 {
     pal,
@@ -80,7 +87,8 @@ struct video_format_desc final
     int                  square_width;
     int                  square_height;
     int                  field_count;
-    double               fps; // actual framerate = duration/time_scale, e.g. i50 = 25 fps, p50 = 50 fps
+    double               hz;  // actual tickrate of the channel, e.g. i50 = 25 hz, p50 = 50 hz
+    double               fps; // actual fieldrate, e.g. i50 = 50 fps, p50 = 50 fps
     boost::rational<int> framerate;
     int                  time_scale;
     int                  duration;
@@ -119,7 +127,7 @@ class video_format_repository
     video_format_desc find_format(const video_format& format) const;
     void              store(const video_format_desc& format);
 
-    std::size_t      get_max_video_format_size() const;
+    std::size_t get_max_video_format_size() const;
 
     static video_format_desc invalid();
 
