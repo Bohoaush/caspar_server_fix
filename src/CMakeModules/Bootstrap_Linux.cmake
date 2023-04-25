@@ -23,9 +23,11 @@ ENDIF ()
 
 SET (BOOST_ROOT_PATH "/opt/boost" CACHE STRING "Path to Boost")
 SET (ENV{BOOST_ROOT} "${BOOST_ROOT_PATH}")
-SET (Boost_USE_DEBUG_LIBS ON)
-SET (Boost_USE_RELEASE_LIBS OFF)
-SET (Boost_USE_STATIC_LIBS ON)
+if (NOT USE_SYSTEM_BOOST)
+	SET (Boost_USE_DEBUG_LIBS ON)
+	SET (Boost_USE_RELEASE_LIBS OFF)
+	SET (Boost_USE_STATIC_LIBS ON)
+endif()
 FIND_PACKAGE (Boost 1.66.0 COMPONENTS system thread chrono filesystem log locale regex date_time coroutine REQUIRED)
 
 SET (FFMPEG_ROOT_PATH "/opt/ffmpeg/lib/pkgconfig" CACHE STRING "Path to FFMPEG")
@@ -68,8 +70,14 @@ ADD_DEFINITIONS (-DBOOST_NO_SWPRINTF) # swprintf on Linux seems to always use , 
 ADD_DEFINITIONS (-DTBB_USE_CAPTURED_EXCEPTION=1)
 ADD_DEFINITIONS (-DNDEBUG) # Needed for precompiled headers to work
 
+if (USE_SYSTEM_BOOST)
+	ADD_DEFINITIONS (-DBOOST_ALL_DYN_LINK)
+endif()
+
+IF (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+	ADD_COMPILE_OPTIONS (-O3) # Needed for precompiled headers to work
+endif()
 ADD_COMPILE_OPTIONS (-std=c++14) # Needed for precompiled headers to work
-ADD_COMPILE_OPTIONS (-O3) # Needed for precompiled headers to work
 ADD_COMPILE_OPTIONS (-msse3)
 ADD_COMPILE_OPTIONS (-mssse3)
 ADD_COMPILE_OPTIONS (-msse4.1)
@@ -96,7 +104,11 @@ SET (CASPARCG_MODULE_UNINIT_STATEMENTS "" CACHE INTERNAL "")
 SET (CASPARCG_MODULE_COMMAND_LINE_ARG_INTERCEPTORS_STATEMENTS "" CACHE INTERNAL "")
 SET (CASPARCG_MODULE_PROJECTS "" CACHE INTERNAL "")
 
-INCLUDE (PrecompiledHeader)
+# This PrecompiledHeader helper is broken on linux in debug builds
+#INCLUDE (PrecompiledHeader)
+FUNCTION (add_precompiled_header TARGET HEADER)
+	# Ignore
+ENDFUNCTION ()
 
 FUNCTION (casparcg_add_include_statement HEADER_FILE_TO_INCLUDE)
 	SET (CASPARCG_MODULE_INCLUDE_STATEMENTS "${CASPARCG_MODULE_INCLUDE_STATEMENTS}"

@@ -29,11 +29,11 @@
 
 #include "../decklink_api.h"
 
-#include <core/video_format.h>
 #include <core/consumer/frame_consumer.h>
 #include <core/diagnostics/call_context.h>
 #include <core/frame/frame.h>
 #include <core/mixer/audio/audio_mixer.h>
+#include <core/video_format.h>
 
 #include <common/array.h>
 #include <common/diagnostics/graph.h>
@@ -51,6 +51,7 @@
 #include <boost/property_tree/ptree.hpp>
 
 #include <atomic>
+#include <common/prec_timer.h>
 #include <condition_variable>
 #include <future>
 #include <mutex>
@@ -93,11 +94,11 @@ struct configuration
     bool      key_only          = false;
     int       base_buffer_depth = 3;
 
-    core::video_format format = core::video_format::invalid;
-    int                src_x = 0;
+    core::video_format format   = core::video_format::invalid;
+    int                src_x    = 0;
     int                src_y    = 0;
-    int                dest_x    = 0;
-    int                dest_y    = 0;
+    int                dest_x   = 0;
+    int                dest_y   = 0;
     int                region_w = 0;
     int                region_h = 0;
 
@@ -301,8 +302,8 @@ struct key_video_context : public IDeckLinkVideoOutputCallback
 struct decklink_consumer : public IDeckLinkVideoOutputCallback
 {
     const core::video_format_repository format_repository_;
-    const int           channel_index_;
-    const configuration config_;
+    const int                           channel_index_;
+    const configuration                 config_;
 
     com_ptr<IDeckLink>                    decklink_      = get_device(config_.device_index);
     com_iface_ptr<IDeckLinkOutput>        output_        = iface_cast<IDeckLinkOutput>(decklink_);
@@ -320,7 +321,7 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
     std::mutex                    buffer_mutex_;
     std::condition_variable       buffer_cond_;
     std::queue<core::const_frame> buffer_;
-    int                           buffer_capacity_ = 1;
+    int                           buffer_capacity_ = channel_format_desc_.field_count;
 
     const int buffer_size_ = config_.buffer_depth(); // Minimum buffer-size 3.
 
@@ -337,15 +338,18 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
 
     com_ptr<IDeckLinkDisplayMode> mode_ =
         get_display_mode(output_, decklink_format_desc_.format, bmdFormat8BitBGRA, bmdVideoOutputFlagDefault);
-    int field_count_ = mode_->GetFieldDominance() != bmdProgressiveFrame ? 2 : 1;
 
     std::atomic<bool> abort_request_{false};
 
     bool doFrame(std::shared_ptr<void>& image_data, std::vector<std::int32_t>& audio_data, bool topField)
     {
-        core::const_frame frame(pop());
+        core::const_frame frame = pop();
         if (abort_request_)
             return false;
+
+        // No point copying an empty frame
+        if (!frame)
+            return true;
 
         int firstLine = topField ? 0 : 1;
 
@@ -353,23 +357,23 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
             config_.region_w == 0 && config_.region_h == 0 && config_.dest_x == 0 && config_.dest_y == 0) {
             // Fast path
             size_t byte_count_line = (size_t)decklink_format_desc_.width * 4;
-            for (int y = firstLine; y < decklink_format_desc_.height; y += field_count_) {
+            for (int y = firstLine; y < decklink_format_desc_.height; y += decklink_format_desc_.field_count) {
                 std::memcpy(reinterpret_cast<char*>(image_data.get()) + (long long)y * byte_count_line,
                             frame.image_data(0).data() + (long long)y * byte_count_line,
                             byte_count_line);
             }
         } else {
             // Take a sub-region
-            
-            // Some repetetive numbers
-            size_t    byte_count_dest_line  = (size_t)decklink_format_desc_.width * 4;
-            size_t    byte_count_src_line   = (size_t)channel_format_desc_.width * 4;
-            size_t    byte_offset_src_line  = std::max(0, (config_.src_x * 4));
-            size_t    byte_offset_dest_line = std::max(0, (config_.dest_x * 4));
-            int       y_skip_src_lines      = std::max(0, config_.src_y);
-            int       y_skip_dest_lines     = std::max(0, config_.dest_y);
 
-            size_t    byte_copy_per_line =
+            // Some repetetive numbers
+            size_t byte_count_dest_line  = (size_t)decklink_format_desc_.width * 4;
+            size_t byte_count_src_line   = (size_t)channel_format_desc_.width * 4;
+            size_t byte_offset_src_line  = std::max(0, (config_.src_x * 4));
+            size_t byte_offset_dest_line = std::max(0, (config_.dest_x * 4));
+            int    y_skip_src_lines      = std::max(0, config_.src_y);
+            int    y_skip_dest_lines     = std::max(0, config_.dest_y);
+
+            size_t byte_copy_per_line =
                 std::min(byte_count_src_line - byte_offset_src_line, byte_count_dest_line - byte_offset_dest_line);
             if (config_.region_w > 0) // If the user chose a width, respect that
                 byte_copy_per_line = std::min(byte_copy_per_line, (size_t)config_.region_w * 4);
@@ -382,17 +386,18 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
             if (config_.region_h > 0) // If the user chose a height, respect that
                 copy_line_count = std::min(copy_line_count, config_.region_h);
 
-            for (int y = firstLine; y < y_skip_dest_lines; y += field_count_) {
+            for (int y = firstLine; y < y_skip_dest_lines; y += decklink_format_desc_.field_count) {
                 // Fill the line with black
                 std::memset(
                     reinterpret_cast<char*>(image_data.get()) + (byte_count_dest_line * y), 0, byte_count_dest_line);
             }
 
-            int firstFillLine = y_skip_dest_lines; 
-            if (field_count_ != 1 && firstFillLine % 2 != firstLine)
+            int firstFillLine = y_skip_dest_lines;
+            if (decklink_format_desc_.field_count != 1 && firstFillLine % 2 != firstLine)
                 firstFillLine += 1;
-            for (int y = firstFillLine; y < y_skip_dest_lines + copy_line_count; y += field_count_) {
-                auto line_start_ptr = reinterpret_cast<char*>(image_data.get()) + (long long)y * byte_count_dest_line;
+            for (int y = firstFillLine; y < y_skip_dest_lines + copy_line_count;
+                 y += decklink_format_desc_.field_count) {
+                auto line_start_ptr   = reinterpret_cast<char*>(image_data.get()) + (long long)y * byte_count_dest_line;
                 auto line_content_ptr = line_start_ptr + byte_offset_dest_line; // Future
 
                 // Fill the start with black
@@ -414,9 +419,9 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
 
             // Calculate the first line number to fill with black
             int firstPadEndLine = y_skip_dest_lines + copy_line_count;
-            if (field_count_ != 1 && firstPadEndLine % 2 != firstLine)
+            if (decklink_format_desc_.field_count != 1 && firstPadEndLine % 2 != firstLine)
                 firstPadEndLine += 1;
-            for (int y = firstPadEndLine; y < decklink_format_desc_.height; y += field_count_) {
+            for (int y = firstPadEndLine; y < decklink_format_desc_.height; y += decklink_format_desc_.field_count) {
                 // Fill the line with black
                 std::memset(
                     reinterpret_cast<char*>(image_data.get()) + (byte_count_dest_line * y), 0, byte_count_dest_line);
@@ -444,15 +449,15 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
         if (channel_format_desc.format == core::video_format::invalid ||
             channel_format_desc.format == core::video_format::custom)
             CASPAR_THROW_EXCEPTION(user_error() << msg_info(L"Decklink does not support the channel format"));
-        
+
         return channel_format_desc;
     }
 
   public:
     decklink_consumer(const core::video_format_repository& format_repository,
                       const configuration&                 config,
-                      const core::video_format_desc& channel_format_desc,
-                      int                            channel_index)
+                      const core::video_format_desc&       channel_format_desc,
+                      int                                  channel_index)
         : format_repository_(format_repository)
         , channel_index_(channel_index)
         , config_(config)
@@ -473,10 +478,6 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
         graph_->set_color("flushed-frame", diagnostics::color(0.4f, 0.3f, 0.8f));
         graph_->set_color("buffered-audio", diagnostics::color(0.9f, 0.9f, 0.5f));
         graph_->set_color("buffered-video", diagnostics::color(0.2f, 0.9f, 0.9f));
-
-        if (mode_->GetFieldDominance() != bmdProgressiveFrame) {
-            graph_->set_color("tick-time-f2", diagnostics::color(0.9f, 0.6f, 0.0f));
-        }
 
         if (key_context_) {
             graph_->set_color("key-offset", diagnostics::color(1.0f, 0.0f, 0.0f));
@@ -499,8 +500,8 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
         }
 
         for (int n = 0; n < buffer_size_; ++n) {
-            auto nb_samples =
-                decklink_format_desc_.audio_cadence[n % decklink_format_desc_.audio_cadence.size()] * field_count_;
+            auto nb_samples = decklink_format_desc_.audio_cadence[n % decklink_format_desc_.audio_cadence.size()] *
+                              decklink_format_desc_.field_count;
             if (config.embedded_audio) {
                 schedule_next_audio(std::vector<int32_t>(nb_samples * decklink_format_desc_.audio_channels),
                                     nb_samples);
@@ -589,21 +590,10 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
         thread_local auto priority_set = false;
         if (!priority_set) {
             priority_set = true;
-            //set_thread_realtime_priority();
+            // set_thread_realtime_priority();
         }
         try {
-            auto elapsed     = tick_timer_.elapsed();
-            int  fieldTimeMs = static_cast<int>(1000 / decklink_format_desc_.fps);
-            // Calculate a time point for when a simulated second field action should occur for interlaced standards.
-            // The tick_timer will run at frame (2x field) rate. If the tick_timer has been delayed because the machine
-            // is busy this calculation reduces the delay before the second field so that it lands at the expected time,
-            // giving the channel the full amount of time to process the following frame.
-            std::chrono::high_resolution_clock::time_point f2TimePoint =
-                std::chrono::high_resolution_clock::now() +
-                std::chrono::milliseconds(std::max<int>(
-                    0, std::min<int>(fieldTimeMs, fieldTimeMs + static_cast<int>(2.0 * fieldTimeMs - elapsed))));
-
-            auto tick_time = elapsed * decklink_format_desc_.fps / field_count_ * 0.5;
+            auto tick_time = tick_timer_.elapsed() * decklink_format_desc_.hz * 0.5;
             graph_->set_value("tick-time", tick_time);
             tick_timer_.restart();
 
@@ -621,7 +611,7 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
 
             if (result == bmdOutputFrameDisplayedLate) {
                 graph_->set_tag(diagnostics::tag_severity::WARNING, "late-frame");
-                video_scheduled_ += decklink_format_desc_.duration * field_count_;
+                video_scheduled_ += decklink_format_desc_.duration;
                 audio_scheduled_ += dframe->nb_samples();
             } else if (result == bmdOutputFrameDropped) {
                 graph_->set_tag(diagnostics::tag_severity::WARNING, "dropped-frame");
@@ -637,8 +627,9 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
                 if (config_.embedded_audio) {
                     output_->GetBufferedAudioSampleFrameCount(&buffered);
                     graph_->set_value("buffered-audio",
-                                      static_cast<double>(buffered) / (decklink_format_desc_.audio_cadence[0] *
-                                                                       field_count_ * config_.buffer_depth()));
+                                      static_cast<double>(buffered) /
+                                          (decklink_format_desc_.audio_cadence[0] * decklink_format_desc_.field_count *
+                                           config_.buffer_depth()));
                 }
             }
 
@@ -649,12 +640,6 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
             if (mode_->GetFieldDominance() != bmdProgressiveFrame) {
                 if (!doFrame(image_data, audio_data, mode_->GetFieldDominance() == bmdUpperFieldFirst))
                     return E_FAIL;
-
-                // Wait to pull frame for second field...
-                std::this_thread::sleep_until(f2TimePoint);
-
-                tick_time = tick_timer_.elapsed() * decklink_format_desc_.fps * 0.5;
-                graph_->set_value("tick-time-f2", tick_time);
 
                 if (!doFrame(image_data, audio_data, mode_->GetFieldDominance() != bmdUpperFieldFirst))
                     return E_FAIL;
@@ -731,7 +716,7 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
                 wrap_raw<com_ptr, IDeckLinkVideoFrame>(new decklink_frame(key, decklink_format_desc_, nb_samples));
             if (FAILED(key_context_->output_->ScheduleVideoFrame(get_raw(key_frame),
                                                                  video_scheduled_,
-                                                                 decklink_format_desc_.duration * field_count_,
+                                                                 decklink_format_desc_.duration,
                                                                  decklink_format_desc_.time_scale))) {
                 CASPAR_LOG(error) << print() << L" Failed to schedule key video.";
             }
@@ -741,15 +726,15 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
             wrap_raw<com_ptr, IDeckLinkVideoFrame>(new decklink_frame(fill, decklink_format_desc_, nb_samples));
         if (FAILED(output_->ScheduleVideoFrame(get_raw(fill_frame),
                                                video_scheduled_,
-                                               decklink_format_desc_.duration * field_count_,
+                                               decklink_format_desc_.duration,
                                                decklink_format_desc_.time_scale))) {
             CASPAR_LOG(error) << print() << L" Failed to schedule fill video.";
         }
 
-        video_scheduled_ += decklink_format_desc_.duration * field_count_;
+        video_scheduled_ += decklink_format_desc_.duration;
     }
 
-    bool send(core::const_frame frame)
+    bool send(core::video_field field, core::const_frame frame)
     {
         {
             std::lock_guard<std::mutex> lock(exception_mutex_);
@@ -760,7 +745,10 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
 
         if (frame) {
             std::unique_lock<std::mutex> lock(buffer_mutex_);
-            buffer_cond_.wait(lock, [&] { return buffer_.size() < buffer_capacity_ || abort_request_; });
+            if (field != core::video_field::b) {
+                // Always push a field2, as we have supplied field1
+                buffer_cond_.wait(lock, [&] { return buffer_.size() < buffer_capacity_ || abort_request_; });
+            }
             buffer_.push(std::move(frame));
         }
         buffer_cond_.notify_all();
@@ -783,10 +771,10 @@ struct decklink_consumer : public IDeckLinkVideoOutputCallback
 struct decklink_consumer_proxy : public core::frame_consumer
 {
     const core::video_format_repository format_repository_;
-    const configuration                config_;
-    std::unique_ptr<decklink_consumer> consumer_;
-    core::video_format_desc            format_desc_;
-    executor                           executor_;
+    const configuration                 config_;
+    std::unique_ptr<decklink_consumer>  consumer_;
+    core::video_format_desc             format_desc_;
+    executor                            executor_;
 
   public:
     explicit decklink_consumer_proxy(const core::video_format_repository& format_repository,
@@ -816,9 +804,9 @@ struct decklink_consumer_proxy : public core::frame_consumer
         });
     }
 
-    std::future<bool> send(core::const_frame frame) override
+    std::future<bool> send(core::video_field field, core::const_frame frame) override
     {
-        return executor_.begin_invoke([=] { return consumer_->send(frame); });
+        return executor_.begin_invoke([=] { return consumer_->send(field, frame); });
     }
 
     std::wstring print() const override { return consumer_ ? consumer_->print() : L"[decklink_consumer]"; }
@@ -831,7 +819,7 @@ struct decklink_consumer_proxy : public core::frame_consumer
 };
 
 spl::shared_ptr<core::frame_consumer> create_consumer(const std::vector<std::wstring>&     params,
-                                                      const core::video_format_repository& format_repository, 
+                                                      const core::video_format_repository& format_repository,
                                                       std::vector<spl::shared_ptr<core::video_channel>> channels)
 {
     if (params.size() < 1 || !boost::iequals(params.at(0), L"DECKLINK")) {
@@ -871,7 +859,7 @@ spl::shared_ptr<core::frame_consumer> create_consumer(const std::vector<std::wst
 
 spl::shared_ptr<core::frame_consumer>
 create_preconfigured_consumer(const boost::property_tree::wptree&               ptree,
-                              const core::video_format_repository&              format_repository, 
+                              const core::video_format_repository&              format_repository,
                               std::vector<spl::shared_ptr<core::video_channel>> channels)
 {
     configuration config;

@@ -128,7 +128,7 @@ void MiscellaneousCommand::Setup(const std::vector<std::wstring>& parameters)
         if (newformat.format == core::video_format::invalid)
             return;
 
-        this->pCIIStrategy_->GetChannel()->video_format_desc(newformat);
+        this->pCIIStrategy_->GetChannel()->stage()->video_format_desc(newformat);
     }
 }
 
@@ -161,7 +161,7 @@ void KeydataCommand::Execute()
     else if (state_ == 1)
         proxy->stop(layer_);
     else if (state_ == 2)
-        pCIIStrategy_->GetChannel()->stage().clear();
+        pCIIStrategy_->GetChannel()->stage()->clear();
     else if (state_ == 3)
         proxy->play(layer_);
 }

@@ -133,29 +133,7 @@ class renderer_application
         CefRefPtr<CefV8Value>     ret;
         CefRefPtr<CefV8Exception> exception;
         bool                      injected = context->Eval(R"(
-			var requestedAnimationFrames	= {};
-			var currentAnimationFrameId		= 0;
-
-            window.caspar = {};
-
-			window.requestAnimationFrame = function(callback) {
-				requestedAnimationFrames[++currentAnimationFrameId] = callback;
-				return currentAnimationFrameId;
-			}
-
-			window.cancelAnimationFrame = function(animationFrameId) {
-				delete requestedAnimationFrames[animationFrameId];
-			}
-
-			function tickAnimations() {
-				var requestedFrames = requestedAnimationFrames;
-				var timestamp = performance.now();
-				requestedAnimationFrames = {};
-
-				for (var animationFrameId in requestedFrames)
-					if (requestedFrames.hasOwnProperty(animationFrameId))
-						requestedFrames[animationFrameId](timestamp);
-			}
+            window.caspar = window.casparcg = {};
 		)",
                                       CefString(),
                                       1,
@@ -196,6 +174,7 @@ class renderer_application
         command_line->AppendSwitch("disable-web-security");
         command_line->AppendSwitch("enable-begin-frame-scheduling");
         command_line->AppendSwitch("enable-media-stream");
+        command_line->AppendSwitch("use-fake-ui-for-media-stream");
         command_line->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required");
 
         if (process_type.empty() && !enable_gpu_) {
@@ -206,23 +185,6 @@ class renderer_application
             command_line->AppendSwitch("disable-gpu-compositing");
             command_line->AppendSwitchWithValue("disable-gpu-vsync", "gpu");
         }
-    }
-
-    bool OnProcessMessageReceived(CefRefPtr<CefBrowser>        browser,
-                                  CefRefPtr<CefFrame>          frame,
-                                  CefProcessId                 source_process,
-                                  CefRefPtr<CefProcessMessage> message) override
-    {
-        if (message->GetName().ToString() == TICK_MESSAGE_NAME) {
-            for (auto& context : contexts_) {
-                CefRefPtr<CefV8Value>     ret;
-                CefRefPtr<CefV8Exception> exception;
-                context->Eval("tickAnimations()", CefString(), 1, ret, exception);
-            }
-
-            return true;
-        }
-        return false;
     }
 
     IMPLEMENT_REFCOUNTING(renderer_application);
