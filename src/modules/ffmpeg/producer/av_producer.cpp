@@ -154,7 +154,7 @@ class Decoder
                             input.pop();
                         }
                         try {
-                        FF(avcodec_send_packet(ctx.get(), packet.get()));
+                            FF(avcodec_send_packet(ctx.get(), packet.get()));
                         } catch (ffmpeg_error_t& ex) {
                             if (auto errn = boost::get_error_info<ffmpeg_errn_info>(ex)) {
                                 if (*errn == AVERROR_EXIT) {
