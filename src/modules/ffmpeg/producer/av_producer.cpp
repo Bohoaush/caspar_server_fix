@@ -154,11 +154,16 @@ class Decoder
                             packet = std::move(input.front());
                             input.pop();
                         }
-                        CASPAR_LOG(warning) << "packet duration: " << packet.get()->duration;
-                        try {
-                            FF(avcodec_send_packet(ctx.get(), packet.get()));
-                        } catch(...) {
-                            CASPAR_LOG_CURRENT_EXCEPTION();
+                        auto currpacket = packet.get();
+                        //CASPAR_LOG(warning) << "packet duration: " << packet.get()->duration;
+                        if (currpacket->duration < 2160) {
+                            try {
+                                FF(avcodec_send_packet(ctx.get(), packet.get()));
+                            } catch(...) {
+                                CASPAR_LOG_CURRENT_EXCEPTION();
+                            }
+                        } else {
+                            CASPAR_LOG(warning) << "packet duration smaller than expected: " << packet.get()->duration;
                         }
                     } else if (ret == AVERROR_EOF) {
                         avcodec_flush_buffers(ctx.get());
