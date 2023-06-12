@@ -154,7 +154,7 @@ class Decoder
                             packet = std::move(input.front());
                             input.pop();
                         }
-                        CASPAR_LOG(warning) << print() << "packet duration: " << packet.get().duration;
+                        CASPAR_LOG(warning) << print() << "packet duration: " << packet.get()->duration;
                         try {
                             FF(avcodec_send_packet(ctx.get(), packet.get()));
                         } catch(...) {
