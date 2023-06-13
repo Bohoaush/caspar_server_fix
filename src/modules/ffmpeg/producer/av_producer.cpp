@@ -156,7 +156,7 @@ class Decoder
                         }
                         auto currpacket = packet.get();
                         //CASPAR_LOG(warning) << "packet duration: " << packet.get()->duration;
-                        if (currpacket->duration > 2160) {
+                        if (currpacket->duration >= 2160) {
                             try {
                                 FF(avcodec_send_packet(ctx.get(), packet.get()));
                             } catch(...) {
