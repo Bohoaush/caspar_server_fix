@@ -200,7 +200,16 @@ class Decoder
                             packet = std::move(input.front());
                             input.pop();
                         }
-                        FF(avcodec_send_packet(ctx.get(), packet.get()));
+                        try {
+                            FF(avcodec_send_packet(ctx.get(), packet.get()));
+                        } catch (ffmpeg_error_t& ex) {
+                            if (auto errn = boost::get_error_info<ffmpeg_errn_info>(ex)) {
+                                if (*errn == AVERROR_EXIT) {
+                                    return;
+                                }
+                            }
+                            CASPAR_LOG_CURRENT_EXCEPTION();
+                        }
                     } else if (ret == AVERROR_EOF) {
                         avcodec_flush_buffers(ctx.get());
                         av_frame->pts = next_pts;
